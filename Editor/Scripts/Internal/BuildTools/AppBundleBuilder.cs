@@ -65,9 +65,8 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
 
         private readonly AndroidAssetPackagingTool _androidAssetPackagingTool;
         private readonly AndroidBuilder _androidBuilder;
-        private readonly ApkSigner _apkSigner;
         private readonly BundletoolHelper _bundletool;
-        private readonly ReleaseBuildHelper _releaseBuildHelper;
+        private readonly JarSigner _jarSigner;
         private readonly string _workingDirectoryPath;
         private readonly ZipUtils _zipUtils;
 
@@ -90,17 +89,15 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
         public AppBundleBuilder(
             AndroidAssetPackagingTool androidAssetPackagingTool,
             AndroidBuilder androidBuilder,
-            ApkSigner apkSigner,
             BundletoolHelper bundletool,
-            ReleaseBuildHelper releaseBuildHelper,
+            JarSigner jarSigner,
             string workingDirectoryPath,
             ZipUtils zipUtils)
         {
             _androidAssetPackagingTool = androidAssetPackagingTool;
             _androidBuilder = androidBuilder;
-            _apkSigner = apkSigner;
             _bundletool = bundletool;
-            _releaseBuildHelper = releaseBuildHelper;
+            _jarSigner = jarSigner;
             _workingDirectoryPath = workingDirectoryPath;
             _zipUtils = zipUtils;
         }
@@ -122,9 +119,8 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             return initializedManifestTransformers
                    && _androidAssetPackagingTool.Initialize(buildToolLogger)
                    && _androidBuilder.Initialize(buildToolLogger)
-                   && _apkSigner.Initialize(buildToolLogger)
+                   && _jarSigner.Initialize(buildToolLogger)
                    && _bundletool.Initialize(buildToolLogger)
-                   && _releaseBuildHelper.Initialize(buildToolLogger)
                    && _zipUtils.Initialize(buildToolLogger);
         }
 
@@ -209,6 +205,7 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 var assetPackName = entry.Key;
                 var assetPack = entry.Value;
                 configParams.enableTcfTargeting |= assetPack.CompressionFormatToAssetBundleFilePath != null;
+                configParams.enableTcfTargeting |= assetPack.CompressionFormatToAssetPackDirectoryPath != null;
                 configParams.containsInstallTimeAssetPack |=
                     assetPack.DeliveryMode == AssetPackDeliveryMode.InstallTime;
 
@@ -276,7 +273,7 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             }
 
             DisplayProgress("Signing bundle", 0.9f);
-            var signingErrorMessage = _apkSigner.SignZip(aabFilePath);
+            var signingErrorMessage = _jarSigner.SignZip(aabFilePath);
             if (signingErrorMessage != null)
             {
                 DisplayBuildError("Signing", signingErrorMessage);
@@ -414,6 +411,25 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 // Copy asset pack files into the module's "assets" folder, inside an "assetpack" folder.
                 var outputDirectory = destinationAssetsDirectory.CreateSubdirectory(AssetPackFolder);
                 CopyFilesRecursively(sourceAssetsDirectory, outputDirectory);
+            }
+            else if (assetPack.CompressionFormatToAssetPackDirectoryPath != null)
+            {
+                // Copy asset pack files into the module's "assets" folder, inside an "assetpack#tcf_xxx" folder.
+                foreach (var compressionAndDirectoryPath in assetPack.CompressionFormatToAssetPackDirectoryPath)
+                {
+                    var sourceAssetsDirectory = new DirectoryInfo(compressionAndDirectoryPath.Value);
+                    if (!sourceAssetsDirectory.Exists)
+                    {
+                        // TODO: check this earlier.
+                        DisplayBuildError("Missing directory for " + assetPackName, sourceAssetsDirectory.FullName);
+                        return false;
+                    }
+
+                    var targetedAssetsFolderName =
+                        AssetPackFolder + TextureTargetingTools.GetTargetingSuffix(compressionAndDirectoryPath.Key);
+                    var outputDirectory = destinationAssetsDirectory.CreateSubdirectory(targetedAssetsFolderName);
+                    CopyFilesRecursively(sourceAssetsDirectory, outputDirectory);
+                }
             }
             else
             {

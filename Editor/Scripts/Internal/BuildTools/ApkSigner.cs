@@ -119,16 +119,6 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             return SignFile(apkFilePath, string.Empty);
         }
 
-        /// <summary>
-        /// Synchronously calls the apksigner tool to sign the specified ZIP file using APK Signature Scheme V1,
-        /// simulating jarsigner behavior. This can be used to sign Android App Bundles.
-        /// </summary>
-        /// <returns>An error message if there was a problem running apksigner, or null if successful.</returns>
-        public virtual string SignZip(string zipFilePath)
-        {
-            return SignFile(zipFilePath, "--min-sdk-version 1 --v1-signing-enabled true --v2-signing-enabled false ");
-        }
-
         private string SignFile(string filePath, string additionalArguments)
         {
             string keystoreName;
