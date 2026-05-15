@@ -167,6 +167,11 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 targetGroup = buildPlayerOptions.targetGroup
             };
 
+            if (EditorUserBuildSettings.androidBuildSystem == AndroidBuildSystem.Gradle)
+            {
+                EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
+            }
+
             // Do not use BuildAndSign since this signature won't be used.
             return _androidBuilder.Build(updatedBuildPlayerOptions) ? androidPlayerFilePath : null;
         }
@@ -192,13 +197,13 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             };
 
             // Create asset pack module directories.
-            var assetPackCount = assetPackConfig.AssetPacks.Count;
             var index = 0;
-            foreach (var entry in assetPackConfig.AssetPacks)
+            var assetPacks = assetPackConfig.DeliveredAssetPacks;
+            foreach (var entry in assetPacks)
             {
                 DisplayProgress(
-                    string.Format("Processing asset pack {0} of {1}", index + 1, assetPackCount),
-                    Mathf.Lerp(0.1f, ProgressCreateBaseModule, (float) index / assetPackCount));
+                    string.Format("Processing asset pack {0} of {1}", index + 1, assetPacks.Count),
+                    Mathf.Lerp(0.1f, ProgressCreateBaseModule, (float) index / assetPacks.Count));
                 index++;
 
                 var assetPackName = entry.Key;
@@ -381,6 +386,7 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             var destinationAssetsDirectory = destinationDirectoryInfo.CreateSubdirectory(AssetsDirectoryName);
             if (assetPack.AssetBundleFilePath != null)
             {
+                // Copy AssetBundle files into the module's "assets" folder, inside an "assetpack" folder.
                 var outputDirectory = destinationAssetsDirectory.CreateSubdirectory(AssetPackFolder).FullName;
                 File.Copy(assetPack.AssetBundleFilePath, Path.Combine(outputDirectory, assetPackName));
             }
@@ -405,7 +411,9 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                     return false;
                 }
 
-                CopyFilesRecursively(sourceAssetsDirectory, destinationAssetsDirectory);
+                // Copy asset pack files into the module's "assets" folder, inside an "assetpack" folder.
+                var outputDirectory = destinationAssetsDirectory.CreateSubdirectory(AssetPackFolder);
+                CopyFilesRecursively(sourceAssetsDirectory, outputDirectory);
             }
             else
             {

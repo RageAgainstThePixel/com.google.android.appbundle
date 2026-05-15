@@ -60,7 +60,7 @@ namespace Google.Android.AppBundle.Editor.Internal
         private static void BuildAndRunDefault()
         {
             var assetPackConfig = AssetPackConfigSerializer.LoadConfig();
-            if (assetPackConfig.AssetPacks.Any())
+            if (assetPackConfig.DeliveredAssetPacks.Any())
             {
                 AppBundlePublisher.BuildAndRun();
             }
@@ -85,6 +85,11 @@ namespace Google.Android.AppBundle.Editor.Internal
             if (!androidBuilder.Initialize(buildToolLogger))
             {
                 return;
+            }
+
+            if (EditorUserBuildSettings.androidBuildSystem == AndroidBuildSystem.Gradle)
+            {
+                EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
             }
 
             var artifactName = AndroidAppBundle.IsNativeBuildEnabled() ? "temp.aab" : "temp.apk";
