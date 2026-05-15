@@ -259,10 +259,6 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 moduleFiles.Add(zipFilePath);
             }
 
-            // If the .aab file exists, EditorUtility.SaveFilePanel() has already prompted for whether to overwrite.
-            // Therefore, prevent Bundletool from throwing an IllegalArgumentException that "File already exists."
-            File.Delete(aabFilePath);
-
             DisplayProgress("Running bundletool", ProgressRunBundletool);
             var buildBundleErrorMessage =
                 _bundletool.BuildBundle(aabFilePath, moduleFiles, bundleMetadata, configParams);
@@ -272,12 +268,20 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 return false;
             }
 
-            DisplayProgress("Signing bundle", 0.9f);
-            var signingErrorMessage = _jarSigner.SignZip(aabFilePath);
-            if (signingErrorMessage != null)
+            // Only sign the .aab if a custom keystore is configured.
+            if (_jarSigner.UseCustomKeystore)
             {
-                DisplayBuildError("Signing", signingErrorMessage);
-                return false;
+                DisplayProgress("Signing bundle", 0.9f);
+                var signingErrorMessage = _jarSigner.Sign(aabFilePath);
+                if (signingErrorMessage != null)
+                {
+                    DisplayBuildError("Signing", signingErrorMessage);
+                    return false;
+                }
+            }
+            else
+            {
+                Debug.LogFormat("Skipped signing since a Custom Keystore isn't configured in Android Player Settings");
             }
 
             Debug.LogFormat("Finished building app bundle: {0}", aabFilePath);
