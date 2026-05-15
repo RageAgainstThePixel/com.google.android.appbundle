@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Xml.Linq;
 using Google.Android.AppBundle.Editor.Internal.AndroidManifest;
@@ -309,6 +310,73 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             return await taskCompletionSource.Task;
         }
 
+        /// <summary>
+        /// Builds an Android App Bundle containing only asset packs.
+        /// </summary>
+        public async Task CreateAssetOnlyBundle(AssetOnlyBuildOptions assetOnlyBuildOptions)
+        {
+            var assetOnlyOptions = new AssetOnlyOptions
+            {
+                AppVersions = new List<long>(assetOnlyBuildOptions.AppVersions),
+                AssetVersionTag = assetOnlyBuildOptions.AssetVersionTag
+            };
+
+            var createBundleOptions = new CreateBundleOptions
+            {
+                AabFilePath = assetOnlyBuildOptions.LocationPathName,
+                AssetPackConfig = SerializationHelper.DeepCopy(assetOnlyBuildOptions.AssetPackConfig),
+                AssetOnlyOptions = assetOnlyOptions
+            };
+
+            var completionSource = new TaskCompletionSource<bool>();
+            if (assetOnlyBuildOptions.ForceSingleThreadedBuild || Application.isBatchMode)
+            {
+                CreateBundleInternal(
+                    completionSource,
+                    () => CreateAssetOnlyBundle(createBundleOptions),
+                    true);
+            }
+            else
+            {
+                StartCreateBundleAsync(() =>
+                {
+                    CreateBundleInternal(
+                        completionSource,
+                        () => CreateAssetOnlyBundle(createBundleOptions),
+                        true);
+                });
+            }
+
+            await completionSource.Task;
+        }
+
+        private string CreateAssetOnlyBundle(CreateBundleOptions options)
+        {
+            if (_buildStatus != BuildStatus.Running)
+            {
+                throw new Exception("Unexpected call to CreateAssetOnlyBundle() with status: " + _buildStatus);
+            }
+
+            var moduleDirectoryList = new List<DirectoryInfo>();
+            var workingDirectory = new DirectoryInfo(_workingDirectoryPath);
+
+            var error = CreateAssetModules(moduleDirectoryList, options.AssetPackConfig, workingDirectory);
+            if (error != null)
+            {
+                return error;
+            }
+
+            error = CreateBundle(moduleDirectoryList, options);
+            if (error != null)
+            {
+                return error;
+            }
+
+            Debug.LogFormat("Finished building asset-only app bundle: {0}", options.AabFilePath);
+            _finishedAabFilePath = options.AabFilePath;
+            _buildStatus = BuildStatus.Succeeding;
+            return null;
+        }
 
         private void CreateBundleInternal<T>(
             TaskCompletionSource<T> taskCompletionSource,
@@ -392,7 +460,7 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             {
                 DisplayProgress(
                     string.Format("Processing asset pack {0} of {1}", index + 1, assetPacks.Count),
-                    Mathf.Lerp(0.1f, ProgressCreateBaseModule, (float) index / assetPacks.Count));
+                    Mathf.Lerp(0.1f, ProgressCreateBaseModule, (float)index / assetPacks.Count));
                 index++;
 
                 var assetPackName = entry.Key;
@@ -427,7 +495,7 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 {
                     DisplayProgress(
                         string.Format("Processing module {0} of {1}", i + 1, numModules),
-                        Mathf.Lerp(ProgressProcessModules, ProgressRunBundletool, (float) i / numModules));
+                        Mathf.Lerp(ProgressProcessModules, ProgressRunBundletool, (float)i / numModules));
                 }
 
                 var moduleDirectoryInfo = moduleDirectoryList[i];
@@ -485,6 +553,9 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
             {
                 defaultTcfSuffix = TextureTargetingTools.GetBundleToolTextureCompressionFormatName(
                     options.AssetPackConfig.DefaultTextureCompressionFormat),
+                defaultDeviceTier =
+                    DeviceTierTargetingTools.GetBundleToolDeviceTierFormatName(
+                        options.AssetPackConfig.DefaultDeviceTier),
                 minSdkVersion = _minSdkVersion,
                 compressionOptions = options.CompressionOptions ?? new CompressionOptions(),
                 containsInstallTimeAssetPack = options.AssetPackConfig.SplitBaseModuleAssets
@@ -498,13 +569,14 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
 
                 configParams.enableTcfTargeting |= assetPack.CompressionFormatToAssetBundleFilePath != null;
                 configParams.enableTcfTargeting |= assetPack.CompressionFormatToAssetPackDirectoryPath != null;
+                configParams.enableDeviceTierTargeting |= assetPack.DeviceTierToAssetBundleFilePath != null;
+                configParams.enableDeviceTierTargeting |= assetPack.DeviceTierToAssetPackDirectoryPath != null;
                 configParams.containsInstallTimeAssetPack |=
                     assetPack.DeliveryMode == AssetPackDeliveryMode.InstallTime;
             }
 
             configParams.containsInstallTimeAssetPack |= options.AssetPackConfig.SplitBaseModuleAssets;
-
-
+            configParams.assetOnlyOptions = options.AssetOnlyOptions;
             return configParams;
         }
 
@@ -526,7 +598,7 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                     // Checking for task cancellation during EditorApplication.update is much more responsive
                     // than only calling DisplayCancelableProgressBar() when the message changes.
                     if (EditorUtility.DisplayCancelableProgressBar(
-                        "Building App Bundle", _progressBarMessage, _progressBarProgress))
+                            "Building App Bundle", _progressBarMessage, _progressBarProgress))
                     {
                         Debug.Log("Cancelling app bundle build...");
                         EditorUtility.ClearProgressBar();
@@ -589,6 +661,17 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                     File.Copy(compressionAndFilePath.Value, Path.Combine(outputDirectory.FullName, assetPackName));
                 }
             }
+            else if (assetPack.DeviceTierToAssetBundleFilePath != null)
+            {
+                // Copy the AssetBundle files into the module's "assets" folder, inside an "assetpack#tier_xxx" folder.
+                foreach (var deviceTierAndFilePath in assetPack.DeviceTierToAssetBundleFilePath)
+                {
+                    var targetedAssetsFolderName =
+                        AssetPackFolder + DeviceTierTargetingTools.GetTargetingSuffix(deviceTierAndFilePath.Key);
+                    var outputDirectory = destinationAssetsDirectory.CreateSubdirectory(targetedAssetsFolderName);
+                    File.Copy(deviceTierAndFilePath.Value, Path.Combine(outputDirectory.FullName, assetPackName));
+                }
+            }
             else if (assetPack.AssetPackDirectoryPath != null)
             {
                 var sourceAssetsDirectory = new DirectoryInfo(assetPack.AssetPackDirectoryPath);
@@ -621,6 +704,25 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                     CopyFilesRecursively(sourceAssetsDirectory, outputDirectory);
                 }
             }
+            else if (assetPack.DeviceTierToAssetPackDirectoryPath != null)
+            {
+                // Copy asset pack files into the module's "assets" folder, inside an "assetpack#tier_xxx" folder.
+                foreach (var deviceTierAndDirectoryPath in assetPack.DeviceTierToAssetPackDirectoryPath)
+                {
+                    var sourceAssetsDirectory = new DirectoryInfo(deviceTierAndDirectoryPath.Value);
+                    if (!sourceAssetsDirectory.Exists)
+                    {
+                        // TODO: check this earlier.
+                        return DisplayBuildError("Missing directory for " + assetPackName,
+                            sourceAssetsDirectory.FullName);
+                    }
+
+                    var targetedAssetsFolderName =
+                        AssetPackFolder + DeviceTierTargetingTools.GetTargetingSuffix(deviceTierAndDirectoryPath.Key);
+                    var outputDirectory = destinationAssetsDirectory.CreateSubdirectory(targetedAssetsFolderName);
+                    CopyFilesRecursively(sourceAssetsDirectory, outputDirectory);
+                }
+            }
             else
             {
                 throw new InvalidOperationException("Missing asset pack files: " + assetPackName);
@@ -639,10 +741,9 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 return;
             }
 
-            var symbolsFilePath = Path.Combine(_workingDirectoryPath, GetSymbolsFileName(AndroidPlayerFilePrefix));
-            if (!File.Exists(symbolsFilePath))
+            var symbolsFilePath = FindSymbolsFile(_workingDirectoryPath);
+            if (symbolsFilePath == null)
             {
-                // The file won't exist for Mono builds or if EditorUserBuildSettings.androidCreateSymbolsZip is false.
                 return;
             }
 
@@ -653,8 +754,22 @@ namespace Google.Android.AppBundle.Editor.Internal.BuildTools
                 // If the symbols file already exists, we need to delete it first.
                 File.Delete(outputSymbolsFilePath);
             }
-
             File.Move(symbolsFilePath, outputSymbolsFilePath);
+        }
+
+        private string FindSymbolsFile(string path)
+        {
+            var pattern = string.Format("{0}-{1}-v{2}*.symbols.zip", AndroidPlayerFilePrefix, _versionName, _versionCode);
+            var matchingFiles = Directory.EnumerateFiles(path, pattern).ToList();
+            if (matchingFiles.Count == 0)
+            {
+                // The file won't exist for Mono builds or if EditorUserBuildSettings.androidCreateSymbolsZip is false.
+                return null;
+            }
+            if (matchingFiles.Count > 1) {
+                throw new Exception("Expected to find only one file matching " + pattern + ", but found " + matchingFiles.Count);
+            }
+            return matchingFiles[0];
         }
 
         private string GetSymbolsFileName(string prefix)
